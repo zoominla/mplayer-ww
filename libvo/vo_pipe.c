@@ -28,7 +28,9 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
+#if defined(__MINGW32__) || defined(__CYGWIN__)
 #include <io.h>
+#endif
 
 #include "config.h"
 #include "subopt-helper.h"
@@ -38,7 +40,7 @@
 #include "mp_msg.h"
 #include "help_mp.h"
 
-#include "sub/sub.h"
+#include "sub.h"
 
 #include "fastmemcpy.h"
 #include "libswscale/swscale.h"
@@ -177,7 +179,7 @@ static int config(uint32_t width, uint32_t height, uint32_t d_width,
 	
 	if(using_format != IMGFMT_YV12)
 	{
-		sws_rgb2rgb_init();
+		sws_rgb2rgb_init(get_sws_cpuflags());
 		rgb_buffer = malloc(image_width * image_height * 3);
 		if (!rgb_buffer)
 		{
@@ -539,7 +541,9 @@ static void uninit(void)
 	image = NULL;
 
 	if (yuv_pipe) {
+#if defined(__MINGW32__) || defined(__CYGWIN__)
 		_commit(yuv_pipe);
+#endif
 		close(yuv_pipe);
 		yuv_pipe = 0;
 	}
@@ -604,7 +608,7 @@ static int preinit(const char *arg)
     return 0;
 }
 
-static int control(uint32_t request, void *data)
+static int control(uint32_t request, void *data, ...)
 {
   switch (request) {
   case VOCTRL_QUERY_FORMAT:

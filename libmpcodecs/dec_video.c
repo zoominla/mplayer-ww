@@ -476,6 +476,7 @@ int filter_video(sh_video_t *sh_video, void *frame, double pts)
     unsigned int t2 = GetTimer();
     vf_instance_t *vf = sh_video->vfilter;
     // apply video filters and call the leaf vo/ve
+    mpi->number = sh_video->num_frames_decoded;
     int ret = vf->put_image(vf, mpi, pts);
     if (ret > 0) {
         // draw EOSD first so it ends up below the OSD.

@@ -285,8 +285,8 @@ static int init(sh_video_t *sh){
         }
         lavc_param_threads = numberOfCPUs;
 #endif
-        if(lavc_codec->id == CODEC_ID_H264 || lavc_codec->id == CODEC_ID_MPEG2TS ||
-				lavc_codec->id == CODEC_ID_MPEG2VIDEO_XVMC) {
+        if(lavc_codec->id == CODEC_ID_H264 /*|| lavc_codec->id == CODEC_ID_FFH264*/ 
+		 || lavc_codec->id == CODEC_ID_MPEG2TS || lavc_codec->id == CODEC_ID_MPEG2VIDEO_XVMC) {
             if (lavc_param_threads > 16) lavc_param_threads = 16;
             if (lavc_param_threads > 1 && (lavc_codec->id == CODEC_ID_MPEG2VIDEO ||
               lavc_codec->id == CODEC_ID_MPEG2TS || lavc_codec->id == CODEC_ID_MPEG2VIDEO_XVMC))
@@ -303,11 +303,6 @@ static int init(sh_video_t *sh){
     if(lavc_codec->capabilities&CODEC_CAP_DR1 && !do_vis_debug && lavc_codec->id != CODEC_ID_INTERPLAY_VIDEO && lavc_codec->id != CODEC_ID_VP8)
         ctx->do_dr1=1;
     ctx->nonref_dr = lavc_codec->id == CODEC_ID_H264;
-    // temporarily disable nonref_dr for 1.1 release
-    if (ctx->nonref_dr) {
-        ctx->do_dr1 = 0;
-        ctx->nonref_dr = 0;
-    }
     ctx->ip_count= ctx->b_count= 0;
 
     ctx->pic = avcodec_alloc_frame();
