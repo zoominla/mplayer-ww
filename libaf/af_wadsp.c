@@ -19,7 +19,6 @@
 #include "af.h"
 #include "af_wadsp.h"
 #include "mp_msg.h"
-#include "winstuff.h"
 
 #define MAX_PLUGINS  8
 
@@ -206,7 +205,6 @@ static int wadsp_load_plugins(char *arg)
         }
     }
 
-    guiCommand(CMD_ACTIVE_WINDOW, 0);
     return 0;
 }
 

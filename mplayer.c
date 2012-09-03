@@ -278,6 +278,12 @@ static MPContext mpctx_s = {
 static MPContext *mpctx = &mpctx_s;
 
 int fixed_vo;
+extern int channel_state;
+#ifdef CONFIG_ICONV
+extern char *url_cp;
+extern char *sub_cps;
+int cp_index_min;
+#endif
 
 // benchmark:
 double video_time_usage;
@@ -299,6 +305,10 @@ int use_gui;
 
 #ifdef CONFIG_GUI
 int enqueue;
+#endif
+
+#ifdef CONFIG_ICONV
+extern char *sub_cps;
 #endif
 
 static int list_properties;
@@ -395,6 +405,14 @@ int sub_auto = 1;
 char *vobsub_name;
 int subcc_enabled;
 int suboverlap_enabled = 1;
+int coreavc_codec = 0;
+#if defined(__MINGW32__) || defined(__CYGWIN__)
+extern int special_codec;
+#else
+int special_codec = 0;
+#endif
+
+char* current_module=NULL; // for debugging
 
 char *current_module; // for debugging
 
@@ -609,6 +627,15 @@ char *get_metadata(metadata_t type)
     return NULL;
 }
 
+static off_t get_media_bitrate()
+{
+	off_t mediasize = mpctx->demuxer->movi_end - mpctx->demuxer->movi_start;
+	off_t len = demuxer_get_time_length(mpctx->demuxer);
+	if(mediasize <= 0 || len <= 0)
+		return 0;
+	return (mediasize*8 / len);
+}
+
 static void print_file_properties(const MPContext *mpctx, const char *filename)
 {
     double video_start_pts = MP_NOPTS_VALUE;
@@ -626,6 +653,7 @@ static void print_file_properties(const MPContext *mpctx, const char *filename)
         mp_msg(MSGT_IDENTIFY, MSGL_INFO, "ID_VIDEO_HEIGHT=%d\n",    mpctx->sh_video->disp_h);
         mp_msg(MSGT_IDENTIFY, MSGL_INFO, "ID_VIDEO_FPS=%5.3f\n",    mpctx->sh_video->fps);
         mp_msg(MSGT_IDENTIFY, MSGL_INFO, "ID_VIDEO_ASPECT=%1.4f\n", mpctx->sh_video->aspect);
+        mp_msg(MSGT_IDENTIFY,MSGL_INFO,"ID_MEDIA_BITRATE=%d\n", get_media_bitrate());
         video_start_pts = ds_get_next_pts(mpctx->d_video);
     }
     if (mpctx->sh_audio) {
@@ -1473,6 +1501,10 @@ void exit_player_with_rc(enum exit_reason how, int rc)
         play_tree_free(mpctx->playtree, 1);
     mpctx->playtree = NULL;
 
+#if defined(__MINGW32__) || defined(__CYGWIN__)
+    unrar_uninit();
+#endif
+
     free(edl_records); // free mem allocated for EDL
     edl_records = NULL;
     switch (how) {
@@ -1812,28 +1844,19 @@ void add_subtitles(char *filename, float fps, int noerr)
 #ifdef CONFIG_ASS
     ASS_Track *asst = 0;
 #endif
-    char *p = NULL, *sp;
-    int i = 0, cp_index = -1, is_ass_format = 1;
+	char *p = NULL;
+	int cp_index = -1;
 
     if (filename == NULL || mpctx->set_of_sub_size >= MAX_SUBTITLE_FILES)
         return;
 
-	if(!always_use_ass && !fake_video) {
-		sp = strrchr(filename, '.');
-		if(sp) {
-			if(strcasecmp(sp, ".ass") && strcasecmp(sp, ".ssa"))
-				is_ass_format = 0;
-		} else
-			is_ass_format = 0;
-	}
-
-    // try to load plain text subtilte
-    sub_cp = sub_cps;
-    do {
-        cp_index++;
-        p = strchr(sub_cp, ',');
-        if (p) *p = 0;            // temp change
-        subd = sub_read_file(filename, fps);
+	// try to load plain text subtilte
+	sub_cp = sub_cps;
+	do {
+		cp_index++;
+		p = strchr(sub_cp, ',');
+		if (p) *p = 0;			// temp change
+    subd = sub_read_file(filename, fps);
 #ifdef CONFIG_ASS
     if (ass_enabled && is_ass_format)
 #ifdef CONFIG_ICONV
@@ -1841,17 +1864,16 @@ void add_subtitles(char *filename, float fps, int noerr)
 #else
         asst = ass_read_stream(ass_library, filename, 0);
 #endif
-#endif
-        if (p) {
-            *p = ',';            // restore
-            if (!subd)
-                sub_cp = p + 1;    // to next codepage token
-        }
-        else break;                // no more codepage token
-    } while (!subd && sub_cp && *sub_cp);
-
-#ifdef CONFIG_ASS
-    if (ass_enabled && is_ass_format && subd && !asst)
+		if (p)
+		{
+			*p = ',';			// restore
+			if (!subd)
+				sub_cp = p + 1;	// to next codepage token
+		}
+		else break;				// no more codepage token
+	} while (!subd && sub_cp && *sub_cp);
+	
+    if (ass_enabled && subd && !asst)
         asst = ass_read_subdata(ass_library, subd, fps);
 
     if (!asst && !subd)
@@ -2315,6 +2337,116 @@ void set_osd_bar(int type, const char *name, double min, double max, double val)
                 name, ROUND(100 * (val - min) / (max - min)));
 }
 
+int is_mpegts_format=0;
+int stream_offset_ex=0;
+int stream_need_adjust=0;
+static int is_vob_format=0;
+static int is_asf_format=0;
+static int adjust_ts_offset=1;
+static int mpegts_not_mpeg=0;
+static int save_frame_dropping=0;
+static float save_subdelay=0;
+static double save_endpos=0;
+static double demuxer_get_current_time_ex(demuxer_t *demuxer, int len)
+{
+    double get_time_ans, offset, pts;
+    get_time_ans = pts = demuxer_get_current_time(mpctx->demuxer);
+    if(stream_need_adjust) {
+        if(is_mpegts_format && !mpegts_not_mpeg) {
+            sh_video_t *sh_video = demuxer->video->sh;
+            sh_audio_t *sh_audio = demuxer->audio->sh;
+            if (sh_video && sh_video->i_bps && sh_audio && sh_audio->i_bps)
+                get_time_ans = (demuxer->filepos - demuxer->movi_start)
+                                        / (sh_video->i_bps + sh_audio->i_bps);
+            else if (sh_video && sh_video->i_bps)
+                get_time_ans = (demuxer->filepos - demuxer->movi_start) / sh_video->i_bps;
+            else if (sh_audio && sh_audio->i_bps)
+                get_time_ans = (demuxer->filepos - demuxer->movi_start) / sh_audio->i_bps;
+            else
+                get_time_ans = 0;
+            offset = get_time_ans-pts;
+            if(offset > 0) offset = 0;
+            if(adjust_ts_offset == 1 && offset < 0) {
+                stream_offset_ex = offset;
+                save_subdelay = sub_delay;
+                sub_delay = save_subdelay+stream_offset_ex;
+                end_at.pos = save_endpos-stream_offset_ex;
+                adjust_ts_offset = -1;
+            } else if(adjust_ts_offset == -1 && offset < 0
+                 && (stream_offset_ex < offset-1 || stream_offset_ex > offset+1)) {
+                sub_delay += offset-stream_offset_ex;
+                end_at.pos += stream_offset_ex-offset;
+                stream_offset_ex = offset;
+            }
+        } else if(adjust_ts_offset) {
+            get_time_ans += stream_offset_ex;
+        }
+    }
+    return get_time_ans;
+}
+
+static void update_ts_offset_ex(demuxer_t *demuxer)
+{
+    int get_time_ans, offset, pts, len;
+
+    if(!stream_need_adjust || (mpegts_not_mpeg && !save_frame_dropping))
+        return;
+
+    pts = demuxer_get_current_time(demuxer);
+
+	if (is_mpegts_format == 2 && save_frame_dropping && pts > 1) {
+        frame_dropping = save_frame_dropping;
+        save_frame_dropping = 0;
+    } else if(stream_need_adjust && is_mpegts_format) {
+        sh_video_t *sh_video = demuxer->video->sh;
+        sh_audio_t *sh_audio = demuxer->audio->sh;
+        if (sh_video && sh_video->i_bps && sh_audio && sh_audio->i_bps)
+            get_time_ans = (demuxer->filepos - demuxer->movi_start)
+                                    / (sh_video->i_bps + sh_audio->i_bps);
+        else if (sh_video && sh_video->i_bps)
+            get_time_ans = (demuxer->filepos - demuxer->movi_start) / sh_video->i_bps;
+        else if (sh_audio && sh_audio->i_bps)
+            get_time_ans = (demuxer->filepos - demuxer->movi_start) / sh_audio->i_bps;
+        else
+            get_time_ans = 0;
+        if(is_mpegts_format == 2 && save_frame_dropping && get_time_ans > 1) {
+            frame_dropping = save_frame_dropping;
+            save_frame_dropping = 0;
+        }
+        if(!mpegts_not_mpeg) {
+            offset = get_time_ans-pts;
+            if(offset > 0) offset = 0;
+            if(adjust_ts_offset == 1 && offset < 0) {
+                stream_offset_ex = offset;
+                save_subdelay = sub_delay;
+                sub_delay = save_subdelay+stream_offset_ex;
+                end_at.pos = save_endpos-stream_offset_ex;
+                adjust_ts_offset = -1;
+            } else if(adjust_ts_offset == -1 && offset < 0
+                 && (stream_offset_ex < offset-1 || stream_offset_ex > offset+1)) {
+                sub_delay += offset-stream_offset_ex;
+                end_at.pos += stream_offset_ex-offset;
+                stream_offset_ex = offset;
+            }
+        }
+    }
+}
+
+static void adjust_stream_offset_ex(float offset)
+{
+    save_subdelay = sub_delay;
+    save_endpos = end_at.pos;
+	stream_offset_ex = 0;
+    if(offset > 0) {
+        stream_offset_ex = -offset;
+        end_at.pos += offset;
+        sub_delay -= offset;
+        adjust_ts_offset = -1;
+    } else {
+        adjust_ts_offset = 1;
+    }
+}
+
 /**
  * @brief Display text subtitles on the OSD.
  */
@@ -2386,6 +2518,10 @@ static void update_osd_msg(void)
 
         if(show_status || osd_level>=2) {
             int percentage = -1;
+            char percentage_text[10];
+            char fractions_text[4];
+            double pts = demuxer_get_current_time_ex(mpctx->demuxer, len);
+            int pts_seconds = pts;
 
             if (mpctx->osd_show_percentage)
                 percentage = demuxer_get_percent_pos(mpctx->demuxer);
@@ -2460,38 +2596,12 @@ static void update_osd_msg(void)
             else if(osd_systime == 9)
                 snprintf(osd_text_timer, 63, "%s",systime_text_only);
             else
-                snprintf(osd_text_timer, 63, "%c %02d:%02d:%02d%s%s%s",mpctx->osd_function
-                    ,pts_seconds/3600,(pts_seconds/60)%60,pts_seconds%60,fractions_text,percentage_text,systime_text);
-        }
-        if(show_status) {
-			if(show_status2) {
-				status_text_timer2[0]=0;
-				if(show_status2 == 5) {
-					snprintf(status_text_timer2, 63, "%02d:%02d:%02d",
-						len/3600,(len/60)%60,len%60);
-				} else if(show_status2 == 6) {
-					snprintf(status_text_timer2, 63, "-%02d:%02d:%02d",
-						(len-pts_seconds)/3600,((len-pts_seconds)/60)%60,(len-pts_seconds)%60);
-				}
-			}
-            if(show_status > 3) {
-                snprintf(status_text_timer, 63, "%c %02d:%02d:%02d%s%s",
-                    mpctx->osd_function,pts_seconds/3600,(pts_seconds/60)%60,pts_seconds%60,percentage_text,systime_text);
-            } else if(show_status == 3) {
-                snprintf(status_text_timer, 63, "%c %02d:%02d:%02d / %02d:%02d:%02d%s%s",
-                    mpctx->osd_function,pts_seconds/3600,(pts_seconds/60)%60,pts_seconds%60,
-                    len/3600,(len/60)%60,len%60,percentage_text,systime_text);
-            } else if(show_status == 2) {
-                snprintf(status_text_timer, 63, "%c %02d:%02d:%02d"
-                    , mpctx->osd_function, pts_seconds/3600, (pts_seconds/60)%60, pts_seconds%60);
-            } else {
-                snprintf(status_text_timer, 63, "%c %02d:%02d:%02d / %02d:%02d:%02d"
-                    , mpctx->osd_function, pts_seconds/3600, (pts_seconds/60)%60, pts_seconds%60, len/3600, (len/60)%60, len%60);
-            }
-            if(strcasecmp(status_text_saved, status_text_timer)) {
-                guiCommand(CMD_UPDATE_STATUS, status_text_timer);
-                strcpy(status_text_saved, status_text_timer);
-            }
+                snprintf(osd_text_timer, 63, "%c %02d:%02d:%02d%s%s",
+                         mpctx->osd_function, pts_seconds / 3600, (pts_seconds / 60) % 60,
+                         pts_seconds % 60, fractions_text, percentage_text);
+        } else {
+            update_ts_offset_ex(mpctx->demuxer);
+            osd_text_timer[0] = 0;
         }
 
         // always decrement the percentage timer
@@ -3254,13 +3364,24 @@ int reinit_video_chain(void)
 
     initialized_flags |= INITIALIZED_VCODEC;
 
-    if (sh_video->codec) {
-	    if(!strcasecmp(sh_video->codec->name, "wmv11dmo") || !strcasecmp(sh_video->codec->name, "wmvvc1dmo") ||
-                !strcasecmp(sh_video->codec->name, "wmvdmo") || !strcasecmp(sh_video->codec->name, "wmv9dmo") ||
+    coreavc_codec = 0;
+    special_codec = 0;
+	if (sh_video->codec) {
+		if(!strcasecmp(sh_video->codec->name, "wmv11dmo") || !strcasecmp(sh_video->codec->name, "wmvvc1dmo") ||
+				!strcasecmp(sh_video->codec->name, "wmvdmo") || !strcasecmp(sh_video->codec->name, "wmv9dmo") ||
+				!strcasecmp(sh_video->codec->name, "divxh264win")) {
+			special_codec = 1;
+		} else if(!strcasecmp(sh_video->codec->name, "coreavc") ||
 				!strcasecmp(sh_video->codec->name, "coreavcwindows")) {
-    	    codec_swap_uv = 1;
-        }
-        mp_msg(MSGT_IDENTIFY, MSGL_INFO, "ID_VIDEO_CODEC=%s\n", sh_video->codec->name);
+			special_codec = 1;
+			coreavc_codec = 1;
+			if(!strcasecmp(mpctx->demuxer->desc->name, "lavf"))
+				user_correct_pts = 0;
+			if(user_correct_pts)
+				correct_pts = 1;
+		}
+		mp_msg(MSGT_IDENTIFY, MSGL_INFO, "ID_VIDEO_CODEC=%s\n", sh_video->codec->name);
+	}
     }
 
     last_pts = -303;
@@ -3297,7 +3418,7 @@ static double update_video(int *blit_frame)
     //--------------------  Decode a frame: -----------------------
     double frame_time;
     *blit_frame = 0; // Don't blit if we hit EOF
-    if (!correct_pts || fake_video) {
+    if (!correct_pts || (special_codec && !coreavc_codec)) {
         unsigned char *start = NULL;
         void *decoded_frame  = NULL;
         int drop_frame       = 0;
@@ -3662,6 +3783,27 @@ static int seek(MPContext *mpctx, double amount, int style)
     return 0;
 }
 
+static float get_stream_offset_ex()
+{
+    int offset = 0;
+
+    if(!is_mpegts_format && !is_asf_format && !is_vob_format)
+        return 0;
+
+    offset = mpctx->d_audio->pts;
+    if(is_mpegts_format && offset < 10) offset = 0;
+    if(offset > 0) {
+		stream_need_adjust = 1;
+        mp_msg(MSGT_CPLAYER,MSGL_V,"Stream time offset: %f\n", offset);
+	}
+
+    if(is_mpegts_format == 2 && frame_dropping) {
+        save_frame_dropping = frame_dropping;
+        frame_dropping = 0;
+    }
+    return offset;
+}
+
 /* This preprocessor directive is a hack to generate a mplayer-nomain.o object
  * file for some tools to link against. */
 #ifndef DISABLE_MAIN
@@ -3682,6 +3824,10 @@ int main(int argc, char *argv[])
     common_preinit();
     initHelp();
     set_playlist_mpctx(mpctx);
+
+#if defined(__MINGW32__) || defined(__CYGWIN__)
+    unrar_init();
+#endif
 
     // Create the config context and register the options
     mconfig = m_config_new();
@@ -4210,6 +4356,8 @@ play_next_file:
     }
     mpctx->sh_audio = NULL;
     mpctx->sh_video = NULL;
+    is_mpegts_format=0;
+    mpegts_not_mpeg=0;
 
     if(new_dvd_device) {
         if(dvd_device) free(dvd_device);
@@ -4667,34 +4815,17 @@ goto_enable_cache:
         }
     }
 
-
-    if (mpctx->sh_video && !fake_video) {
-        if(save_auto_threads) {
-            auto_threads = save_auto_threads;
-            save_auto_threads = 0;
-        }
-        if(!is_mpegts_format && !strcasecmp(mpctx->demuxer->desc->name, "mpegts")) {
-            is_mpegts_format = 1;
-            if(auto_threads && mpctx->sh_video->format == 0x10000005
-                    && mem_ptr && (!strcasecmp(mem_ptr, ".m2ts") || !strcasecmp(mem_ptr, ".mts"))) {
-                save_auto_threads = auto_threads;
-                auto_threads = 0;
-            }
-        }
-        if(is_mpegts_format == 2 && mpctx->sh_video->format >= 0x20202020 &&
-		    	strcasecmp((char *)&mpctx->sh_video->format, "mpg2")) {
-            mpegts_not_mpeg = 1;
-        }
-        if(!is_vob_format && mem_ptr && (!strcasecmp(mpctx->demuxer->desc->name, "mpegps") &&
-    	        !strcasecmp(mem_ptr, ".vob"))) {
-	    	is_vob_format = 1;
-	    	seek_realtime = 0;
-        }
-        if(!is_asf_format && !strcasecmp(mpctx->demuxer->desc->name, "asf")) {
-            is_asf_format = 1;
-        }
-    }
-
+	if (mpctx->sh_video) {
+		char *ext = strrchr(filename, '.');
+		if(!is_mpegts_format && !strcasecmp(mpctx->demuxer->desc->name, "mpegts"))
+			is_mpegts_format = 1;
+		if(!is_mpegts_format && ext && (!strcasecmp(mpctx->demuxer->desc->name, "mpegps") && !strcasecmp(ext, ".vob")) )
+			is_mpegts_format = 1;
+		if(is_mpegts_format == 2 && mpctx->sh_video->format >= 0x20202020 && strcasecmp((char *)&mpctx->sh_video->format, "mpg2"))
+			mpegts_not_mpeg = 1;
+		if(!is_asf_format && !strcasecmp(mpctx->demuxer->desc->name, "asf"))
+			is_asf_format = 1;
+	}
     print_file_properties(mpctx, filename);
 
     // Adjust EDL positions with start_pts
@@ -4846,18 +4977,9 @@ goto_enable_cache:
             goto goto_next_file;
         }
 
-		adjust_stream_offset_ex(get_stream_offset_ex());
-		
-		mixer_setvolume(&mpctx->mixer, (float)save_volume, (float)save_volume);
-		update_sub_list(0);
-		
-		guiCommand(CMD_UPDATE_TITLE, (int)(mpctx->stream));
-		guiCommand(CMD_UPDATE_SUBMENU, mpctx->global_sub_pos);
-		
-        if (reload && (save_sec>0)) {
-            seek(mpctx, save_sec, SEEK_ABSOLUTE);
-            end_at.pos += save_sec;
-        } else if (seek_to_sec) {
+        adjust_stream_offset_ex(get_stream_offset_ex());
+
+        if (seek_to_sec) {
             seek(mpctx, seek_to_sec, SEEK_ABSOLUTE);
             end_at.pos += seek_to_sec;
         } else if(seek_to_time > 3) {

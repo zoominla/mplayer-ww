@@ -31,7 +31,9 @@
 #include "stream/stream.h"
 #include "libmpdemux/muxer.h"
 #include "ae_pcm.h"
+#if defined(__MINGW32__) || defined(__CYGWIN__)
 #include <io.h>
+#endif
 
 static int ao_pipe = 0;
 static int pipe_only = 0;
@@ -113,7 +115,9 @@ static int set_decoded_len(audio_encoder_t *encoder, int len)
 static int close_pcm(audio_encoder_t *encoder)
 {
 	if (ao_pipe) {
+#if defined(__MINGW32__) || defined(__CYGWIN__)
 		_commit(ao_pipe);
+#endif
 		close(ao_pipe);
 		ao_pipe = 0;
 	}

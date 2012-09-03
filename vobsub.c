@@ -21,13 +21,11 @@
 
 #include <ctype.h>
 #include <errno.h>
-#include <inttypes.h>
 #include <limits.h>
 #include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <mbstring.h>
 #include <fcntl.h>
 #include <unistd.h>
 #include <sys/stat.h>
@@ -38,7 +36,6 @@
 #include "vobsub.h"
 #include "spudec.h"
 #include "mp_msg.h"
-#include "path.h"
 #ifdef __MINGW32__
 #include "unrar.h"
 #endif
@@ -101,7 +98,11 @@ static rar_stream_t *rar_open(const char *const filename,
             strcat(rar_filename, ".rar");
         }
         /* get rid of the path if there is any */
-        p = mp_basename(filename);
+        if ((p = strrchr(filename, '/')) == NULL) {
+            p = filename;
+        } else {
+            p++;
+        }
         rc = unrar_exec_get(&stream->data, &stream->size, p, rar_filename);
         if (!rc) {
             /* There is no matching filename in the archive. However, sometimes
@@ -421,7 +422,8 @@ static mpeg_t *mpeg_open(const char *filename)
 
 static void mpeg_free(mpeg_t *mpeg)
 {
-    free(mpeg->packet);
+    if (mpeg->packet)
+        free(mpeg->packet);
     if (mpeg->stream)
         rar_close(mpeg->stream);
     free(mpeg);
@@ -542,7 +544,8 @@ static int mpeg_run(mpeg_t *mpeg)
             }
             mpeg->packet_size = len - ((unsigned int) mpeg_tell(mpeg) - idx);
             if (mpeg->packet_reserve < mpeg->packet_size) {
-                free(mpeg->packet);
+                if (mpeg->packet)
+                    free(mpeg->packet);
                 mpeg->packet = malloc(mpeg->packet_size);
                 if (mpeg->packet)
                     mpeg->packet_reserve = mpeg->packet_size;
@@ -615,7 +618,8 @@ static void packet_construct(packet_t *pkt)
 
 static void packet_destroy(packet_t *pkt)
 {
-    free(pkt->data);
+    if (pkt->data)
+        free(pkt->data);
 }
 
 static void packet_queue_construct(packet_queue_t *queue)
@@ -701,7 +705,6 @@ typedef struct {
     unsigned int have_palette;
     unsigned int orig_frame_width, orig_frame_height;
     unsigned int origin_x, origin_y;
-    unsigned int scale_x, scale_y;
     /* index */
     packet_queue_t *spu_streams;
     unsigned int spu_streams_size;
@@ -742,7 +745,8 @@ static int vobsub_add_id(vobsub_t *vob, const char *id, size_t idlen,
     if (vobsub_ensure_spu_stream(vob, index) < 0)
         return -1;
     if (id && idlen) {
-        free(vob->spu_streams[index].id);
+        if (vob->spu_streams[index].id)
+            free(vob->spu_streams[index].id);
         vob->spu_streams[index].id = malloc(idlen + 1);
         if (vob->spu_streams[index].id == NULL) {
             mp_msg(MSGT_VOBSUB, MSGL_FATAL, "vobsub_add_id: malloc failure");
@@ -807,25 +811,72 @@ static int vobsub_parse_id(vobsub_t *vob, const char *line)
 
 static int vobsub_parse_timestamp(vobsub_t *vob, const char *line)
 {
+    // timestamp: HH:MM:SS.mmm, filepos: 0nnnnnnnnn
+    const char *p;
     int h, m, s, ms;
     off_t filepos;
-    if (sscanf(line, " %02d:%02d:%02d:%03d, filepos: %09"PRIx64"",
-               &h, &m, &s, &ms, &filepos) != 5)
+    while (isspace(*line))
+        ++line;
+    p = line;
+    while (isdigit(*p))
+        ++p;
+    if (p - line != 2)
         return -1;
+    h = atoi(line);
+    if (*p != ':')
+        return -1;
+    line = ++p;
+    while (isdigit(*p))
+        ++p;
+    if (p - line != 2)
+        return -1;
+    m = atoi(line);
+    if (*p != ':')
+        return -1;
+    line = ++p;
+    while (isdigit(*p))
+        ++p;
+    if (p - line != 2)
+        return -1;
+    s = atoi(line);
+    if (*p != ':')
+        return -1;
+    line = ++p;
+    while (isdigit(*p))
+        ++p;
+    if (p - line != 3)
+        return -1;
+    ms = atoi(line);
+    if (*p != ',')
+        return -1;
+    line = p + 1;
+    while (isspace(*line))
+        ++line;
+    if (strncmp("filepos:", line, 8))
+        return -1;
+    line += 8;
+    while (isspace(*line))
+        ++line;
+    if (! isxdigit(*line))
+        return -1;
+    filepos = strtol(line, NULL, 16);
     return vobsub_add_timestamp(vob, filepos, vob->delay + ms + 1000 * (s + 60 * (m + 60 * h)));
 }
 
 static int vobsub_parse_origin(vobsub_t *vob, const char *line)
 {
     // org: X,Y
-    unsigned x, y;
-
-    if (sscanf(line, " %u,%u", &x, &y) == 2) {
-        vob->origin_x = x;
-        vob->origin_y = y;
-        return 0;
-    }
-    return -1;
+    char *p;
+    while (isspace(*line))
+        ++line;
+    if (!isdigit(*line))
+        return -1;
+    vob->origin_x = strtoul(line, &p, 10);
+    if (*p != ',')
+        return -1;
+    ++p;
+    vob->origin_y = strtoul(p, NULL, 10);
+    return 0;
 }
 
 unsigned int vobsub_palette_to_yuv(unsigned int pal)
@@ -926,7 +977,8 @@ static int vobsub_parse_one_line(vobsub_t *vob, rar_stream_t *fd,
             mp_msg(MSGT_VOBSUB, MSGL_ERR,  "ERROR in %s", line);
         break;
     } while (1);
-    free(line);
+    if (line)
+      free(line);
     return res;
 }
 
@@ -1012,8 +1064,6 @@ void *vobsub_open(const char *const name, const char *const ifo,
         vobsubid = vobsub_id;
     if (vob) {
         char *buf;
-        vob->scale_x = 100;
-        vob->scale_y = 100;
         buf = malloc(strlen(name) + 5);
         if (buf) {
             rar_stream_t *fd;
@@ -1044,7 +1094,8 @@ void *vobsub_open(const char *const name, const char *const ifo,
             }
             if (spu)
                 *spu = spudec_new_scaled(vob->palette, vob->orig_frame_width, vob->orig_frame_height, extradata, extradata_len);
-            free(extradata);
+            if (extradata)
+                free(extradata);
 
             /* read the indexed mpeg_stream */
             strcpy(buf, name);
@@ -1407,7 +1458,7 @@ void vobsub_out_output(void *me, const unsigned char *packet,
             m = s / 60;
             s -= m * 60;
             ms = (s - (unsigned int) s) * 1000;
-            if (ms >= 1000)     /* prevent overflows or bad float stuff */
+            if (ms >= 1000)     /* prevent overfolws or bad float stuff */
                 ms = 0;
             if (h != last_h || m != last_m || (unsigned int) s != last_s || ms != last_ms) {
                 fprintf(vob->fidx, "timestamp: %02u:%02u:%02u:%03u, filepos: %09lx\n",
@@ -1448,13 +1499,13 @@ void vobsub_out_output(void *me, const unsigned char *packet,
             datalen += 1;       /* AID */
             pad_len = 2048 - (p - buffer) - 4 /* MPEG ID */ - 2 /* payload len */ - datalen;
             /* XXX - Go figure what should go here!  In any case the
-               packet has to be completely filled.  If I can fill it
+               packet has to be completly filled.  If I can fill it
                with padding (0x000001be) latter I'll do that.  But if
                there is only room for 6 bytes then I can not write a
                padding packet.  So I add some padding in the PTS
                field.  This looks like a dirty kludge.  Oh well... */
             if (pad_len < 0) {
-                /* Packet is too big.  Let's try omitting the PTS field */
+                /* Packet is too big.  Let's try ommiting the PTS field */
                 datalen -= pts_len;
                 pts_len = 0;
                 pad_len = 0;
@@ -1505,7 +1556,7 @@ void vobsub_out_output(void *me, const unsigned char *packet,
                 perror("ERROR: vobsub blank padding write failed");
         } else if (remain < 0)
             fprintf(stderr,
-                    "\nERROR: wrong thing happened...\n"
+                    "\nERROR: wrong thing happenned...\n"
                     "  I wrote a %i data bytes spu packet and that's too long\n", len);
     }
 }

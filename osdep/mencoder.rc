@@ -35,15 +35,15 @@ FILETYPE VFT_APP
     {
         BLOCK "000004b0" // LANG_NEUTRAL,UNICODE_CP
         {
-            VALUE "Comments","MPlayer is distributed under the terms of the GNU General Public License Version 2. Source code is available at http://www.mplayerhq.hu\000"
+            VALUE "Comments","MEncoder is distributed under the terms of the GNU General Public License Version 2. Source code is available at http://www.mplayerhq.hu\000"
             VALUE "CompanyName", "\000"
-            VALUE "FileDescription", "MPlayer - Movie Player\000"
+            VALUE "FileDescription", "MEncoder - Media Encoder\000"
             VALUE "FileVersion",VERSION
             VALUE "InternalName", "Counter Counter\000"
-            VALUE "LegalCopyright", " (C) 2000-2012 MPlayer Team\000"
+            VALUE "LegalCopyright", " (C) 2000-2011 MPlayer Team\000"
             //VALUE "LegalTrademarks"," \000";
-            VALUE "OriginalFilename", "mplayer.exe\000"
-            VALUE "ProductName", "MPlayer - The Movie Player\000"
+            VALUE "OriginalFilename", "mencoder.exe\000"
+            VALUE "ProductName", "MEncoder - The Media Encoder\000"
             VALUE "ProductVersion",VERSION
             VALUE "SpecialBuild","WW\000"
         }
@@ -54,18 +54,7 @@ FILETYPE VFT_APP
     }
 }
 
-IDI_APPICON ICON DISCARDABLE  "../etc/mplayer.ico"
-IDI_MPLAYER_LOGO     BITMAP DISCARDABLE  "../etc/logo.bmp"
-IDB_TASK_THUMBNAIL   BITMAP DISCARDABLE  "../etc/thumbnail.bmp"
-IDB_SKIN_BACKGROUND  BITMAP DISCARDABLE  "../etc/skin/background.bmp"
-IDB_SKIN_BKGL        BITMAP DISCARDABLE  "../etc/skin/background_left.bmp"
-IDB_SKIN_BKGR        BITMAP DISCARDABLE  "../etc/skin/background_right.bmp"
-IDB_SKIN_SEEKBAR     BITMAP DISCARDABLE  "../etc/skin/seekbar.bmp"
-IDB_SKIN_SEEKBARF    BITMAP DISCARDABLE  "../etc/skin/seekbar_foregnd.bmp"
-IDB_SKIN_SEEKBART    BITMAP DISCARDABLE  "../etc/skin/seekbar_thumb.bmp"
-IDB_SKIN_VOLUMEBAR   BITMAP DISCARDABLE  "../etc/skin/volumebar.bmp"
-IDB_SKIN_VOLUMEBARF  BITMAP DISCARDABLE  "../etc/skin/volumebar_foregnd.bmp"
-IDB_SKIN_VOLUMEBART  BITMAP DISCARDABLE  "../etc/skin/volumebar_thumb.bmp"
+IDI_ICON1 ICON DISCARDABLE  "etc/mencoder.ico"
 
 // for some reason RT_MANIFEST does not work
 1 24 "mplayer.exe.manifest"

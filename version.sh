@@ -4,7 +4,7 @@ test "$1" && extra="-gcc$1"
 build=$(date +%Y%m%d)
 
 # get the version number from git log
-svn_revision=$(git log --grep='git-svn-id:' -1 | grep  'git-svn-id:' | cut -d "@" -f2 | cut -d " " -f1)
+version=$(git log --grep='git-svn-id:' -1 | grep  'git-svn-id:' | cut -d "@" -f2 | cut -d " " -f1)
 
 if test -z $svn_revision ; then
 # Extract revision number from file used by daily tarball snapshots

@@ -317,6 +317,7 @@ SRCS_COMMON = asxparser.c \
               playtree.c \
               playtreeparser.c \
               subopt-helper.c \
+              unrar.c \
               libaf/af.c \
               libaf/af_center.c \
               libaf/af_channels.c \
@@ -715,6 +716,8 @@ OBJS_MENCODER  += $(addsuffix .o, $(basename $(SRCS_MENCODER)))
 OBJS_MPLAYER   += $(addsuffix .o, $(basename $(SRCS_MPLAYER)))
 OBJS_MPLAYER-$(PE_EXECUTABLE) += osdep/mplayer-rc.o
 OBJS_MPLAYER   += $(OBJS_MPLAYER-yes)
+OBJS_MENCODER-$(PE_EXECUTABLE) += osdep/mencoder-rc.o
+OBJS_MENCODER   += $(OBJS_MENCODER-yes)
 
 MENCODER_DEPS = $(OBJS_MENCODER) $(OBJS_COMMON) $(COMMON_LIBS)
 MPLAYER_DEPS  = $(OBJS_MPLAYER)  $(OBJS_COMMON) $(COMMON_LIBS)
@@ -725,8 +728,8 @@ ALL_PRG-$(MPLAYER)  += mplayer$(EXESUF)
 ALL_PRG-$(MENCODER) += mencoder$(EXESUF)
 
 INSTALL_TARGETS-$(GUI)      += install-gui
-INSTALL_TARGETS-$(MENCODER) += install-mencoder install-mencoder-man
-INSTALL_TARGETS-$(MPLAYER)  += install-mplayer  install-mplayer-man
+INSTALL_TARGETS-$(MENCODER) += install-mencoder
+INSTALL_TARGETS-$(MPLAYER)  += install-mplayer
 
 DIRS =  . \
         gui \
@@ -883,9 +886,14 @@ $(foreach lang, $(DOC_LANG_ALL),$(eval $(lang-def)))
 # Make sure all generated header files are created.
 codec-cfg.o: codecs.conf.h
 $(DEP_FILES) $(MENCODER_DEPS) $(MPLAYER_DEPS): help_mp.h
+<<<<<<< HEAD
 mpcommon.o winstuff.o libvo/w32_common.o libvo/vo_directx.o osdep/mplayer-rc.o gui/ui/gtk/about.o gui/win32/gui.o: version.h
+=======
+mpcommon.o osdep/mplayer-rc.o gui/ui/gtk/about.o gui/win32/gui.o osdep/mencoder-rc.o: version.h
+>>>>>>> remotes/origin/console
 
 osdep/mplayer-rc.o: osdep/mplayer.exe.manifest
+osdep/mencoder-rc.o: osdep/mplayer.exe.manifest
 
 gui/%: CFLAGS += -Wno-strict-prototypes
 

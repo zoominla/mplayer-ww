@@ -105,6 +105,8 @@ static int config(struct vf_instance *vf,
             ass_bottom_margin = ass_top_margin = ass_borth_margin;
     }
 
+	ass_last_pts = -303;
+
     vf->priv->outh = height + ass_top_margin + ass_bottom_margin;
     vf->priv->outw = width;
 

@@ -77,8 +77,7 @@ int font_fontconfig = 0;
 int font_fontconfig = -1;
 #endif
 
-extern int fake_video;
-extern char *font_path;
+int use_font_name = 0;
 
 //// constants
 static unsigned int const colors = 256;
@@ -1136,15 +1135,47 @@ void load_font_ft(int width, int height, font_desc_t** fontp, const char *font_n
 
     if (vo_font) free_font_desc(vo_font);
 
-    char name[MAX_PATH];
-	if (font_name) {
-		strcpy(name, font_name);
-		if (strchr(name, ',')) *strchr(name, ',') = 0;
-		if (!strchr(name,'\\')) {
-			memcpy(name+strlen(font_path), name, strlen(name)+1);
-			memcpy(name, font_path, strlen(font_path));
-		}
-	} else
-		name[0] = 0;
-    *fontp=read_font_desc_ft(name, 0, width, height, font_scale_factor);
+	if(use_font_name) {
+		char name[1024];
+		if (font_name)
+			strcpy(name, font_name);
+		else
+			name[0] = 0;
+		*fontp=read_font_desc_ft(name, 0, width, height, font_scale_factor);
+		return;
+	}
+
+#ifdef CONFIG_FONTCONFIG
+    if (font_fontconfig > 0)
+    {
+	FcInit();
+	fc_pattern = FcNameParse(font_name ? font_name : "sans-serif");
+	FcConfigSubstitute(0, fc_pattern, FcMatchPattern);
+	FcDefaultSubstitute(fc_pattern);
+	fc_pattern2 = fc_pattern;
+        fc_pattern = FcFontMatch(0, fc_pattern, &result);
+        if (fc_pattern) {
+            FcPatternDestroy(fc_pattern2);
+            FcPatternGetBool(fc_pattern, FC_SCALABLE, 0, &scalable);
+            if (scalable != FcTrue) {
+                FcPatternDestroy(fc_pattern);
+                fc_pattern = FcNameParse("sans-serif");
+                FcConfigSubstitute(0, fc_pattern, FcMatchPattern);
+                FcDefaultSubstitute(fc_pattern);
+                fc_pattern2 = fc_pattern;
+                fc_pattern = FcFontMatch(0, fc_pattern, &result);
+                FcPatternDestroy(fc_pattern2);
+            }
+            // s doesn't need to be freed according to fontconfig docs
+            FcPatternGetString(fc_pattern, FC_FILE, 0, &s);
+            FcPatternGetInteger(fc_pattern, FC_INDEX, 0, &face_index);
+            *fontp=read_font_desc_ft(s, face_index, width, height, font_scale_factor);
+            FcPatternDestroy(fc_pattern);
+            return;
+        }
+        // Failed to match any font, try without fontconfig
+        mp_msg(MSGT_OSD, MSGL_ERR, MSGTR_LIBVO_FONT_LOAD_FT_FontconfigNoMatch);
+    }
+#endif
+    *fontp=read_font_desc_ft(font_name, 0, width, height, font_scale_factor);
 }

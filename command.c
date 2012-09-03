@@ -76,21 +76,12 @@
 #include "winstuff.h"
 #include "help/help_mp_lang-utf.h"
 
-extern int sys_Language;
-extern m_config_t *mconfig;
-extern int force_load_font;
-extern int need_update_playtree;
-extern int vo_dirver;
-extern int have_audio;
-extern int loop_break;
-extern int not_save_status;
-//extern int screenshot_pts;
+extern char *shot_filename;
+extern int stream_offset_ex;
+extern int stream_need_adjust;
 
 int channel_state = 0; // 0: Both 1: Right 2: Left
 int bChannel = 0;
-
-extern int import_playtree_into_playlist(play_tree_t *tree, m_config_t *config);
-
 static char *channel_state_text[] = {"both", "right", "left"};
 
 static void rescale_input_coordinates(int ix, int iy, double *dx, double *dy)
@@ -993,12 +984,11 @@ static int mp_property_audio(m_option_t *prop, int action, void *arg,
             }
         }
         else if (audio_id > -1 && mpctx->sh_audio->channels == 2) {
-            sh_audio_t *sh = mpctx->sh_audio;
-            channel_state = (channel_state + 2) % 3;
-            uninit_player(INITIALIZED_AO);
-            mpctx->sh_audio = sh;
-            reinit_audio_chain();
-            mixer_setvolume(&mpctx->mixer, (float)save_volume, (float)save_volume);
+                sh_audio_t *sh = mpctx->sh_audio;
+                channel_state = (channel_state + 2) % 3;
+                uninit_player(INITIALIZED_AO|(channel_state?0:INITIALIZED_ACODEC));
+                mpctx->sh_audio = sh;
+                       reinit_audio_chain();
         }
         mp_msg(MSGT_IDENTIFY, MSGL_INFO, "ID_AUDIO_TRACK=%d\n", audio_id);
         return M_PROPERTY_OK;
@@ -3523,6 +3513,18 @@ int run_command(MPContext *mpctx, mp_cmd_t *cmd)
             }
             break;
 
+        case MP_CMD_SCREENSHOT_EX:
+            if (vo_config_count) {
+                shot_filename = strdup(cmd->args[0].v.s);
+                mp_msg(MSGT_CPLAYER, MSGL_INFO, "sending VFCTRL_SCREENSHOT!\n");
+                if (CONTROL_OK !=
+                    ((vf_instance_t *) sh_video->vfilter)->
+                    control(sh_video->vfilter, VFCTRL_SCREENSHOT,
+                            &cmd->args[1].v.i))
+                    mp_msg(MSGT_CPLAYER, MSGL_INFO, "failed (forgot -vf screenshot?)\n");
+            }
+            break;
+
         case MP_CMD_VF_CHANGE_RECTANGLE:
             if (!sh_video)
                 break;
@@ -3566,6 +3568,15 @@ int run_command(MPContext *mpctx, mp_cmd_t *cmd)
                 mp_msg(MSGT_GLOBAL, MSGL_INFO,
                        "ANS_VIDEO_RESOLUTION='%s'\n", inf);
                 free(inf);
+            }
+            break;
+            
+        case MP_CMD_GET_VIDEO_ASPECT:{
+                double aspect = 0;
+                if (mpctx->sh_video)
+                        aspect = mpctx->sh_video->aspect;
+                mp_msg(MSGT_GLOBAL, MSGL_INFO,
+                       "ANS_VIDEO_RESOLUTION=%1.4f\n", aspect);
             }
             break;
 
@@ -3680,6 +3691,20 @@ int run_command(MPContext *mpctx, mp_cmd_t *cmd)
                 mp_msg(MSGT_GLOBAL, MSGL_INFO, "ANS_TIME_POSITION=%.1f\n", pos);
             }
             break;
+            
+        case MP_CMD_GET_TIME_POS_EX:{
+                float pos = 0;
+                if (sh_video)
+                    pos = sh_video->pts;
+                else if (sh_audio && mpctx->audio_out)
+                    pos =
+                        playing_audio_pts(sh_audio, mpctx->d_audio,
+                                          mpctx->audio_out);
+                if(stream_need_adjust) pos += stream_offset_ex;
+                mp_msg(MSGT_GLOBAL, MSGL_INFO, "ANS_TIME_POSITION=%.1f\n", pos);
+            }
+            break;
+
 
         case MP_CMD_RUN:
 #ifndef __MINGW32__

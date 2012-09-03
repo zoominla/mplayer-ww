@@ -59,10 +59,6 @@ int sub_ignore_errors=5;
 static int cp_utf16=0;
 static int _ignore_errors=5;
 static int recode_errors = 0;
-static int lyrics_offset = 0;
-extern int fake_sub;
-extern int always_use_ass;
-extern char *sub_path;
 #endif
 char *sub_cp=NULL;
 #ifdef CONFIG_FRIBIDI

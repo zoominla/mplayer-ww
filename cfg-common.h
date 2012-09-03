@@ -56,6 +56,7 @@
 
 extern int network_timeout;
 
+extern int use_font_name;
 #ifdef CONFIG_ICONV
 extern int sub_ignore_errors;
 #endif
@@ -618,6 +619,7 @@ const m_option_t common_opts[] = {
 #ifdef CONFIG_UNRAR_EXEC
     {"unrarexec", &unrar_executable, CONF_TYPE_STRING, 0, 0, 0, NULL},
 #endif
+    {"use-font-name", &use_font_name, CONF_TYPE_FLAG, 0, 0, 1, NULL},
     // specify IFO file for VOBSUB subtitle
     {"ifo", &spudec_ifo, CONF_TYPE_STRING, 0, 0, 0, NULL},
     // enable Closed Captioning display

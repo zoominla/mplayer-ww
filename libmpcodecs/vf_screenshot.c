@@ -70,6 +70,7 @@ static int config(struct vf_instance *vf,
     vf->priv->avctx->width = d_width;
     vf->priv->avctx->height = d_height;
     vf->priv->avctx->pix_fmt = PIX_FMT_RGB24;
+    vf->priv->avctx->compression_level = 0;
     vf->priv->dw = d_width;
     vf->priv->dh = d_height;
     vf->priv->stride = (3*vf->priv->dw+15)&~15;
@@ -117,43 +118,53 @@ static int fexists(char *fname)
 
 #define MAX_FILEPATH_LEN 240
 extern char *filename;
-extern char *screenshot_dir;
-extern int use_ss_dir;
+char *shot_filename = NULL;
 static void gen_fname(struct vf_priv_s* priv)
 {
 	char *path = NULL, *fname = NULL, *pname = NULL;
 	int file_len = 0, path_len = 0;
-	path = use_ss_dir && screenshot_dir ? strdup(screenshot_dir) : strdup(filename);
-	if(path) {
-		pname = strrchr(path, '\\');
-		if(pname) {
-			pname[1] = 0;
-			path_len = strlen(path);
-			if(path_len > MAX_FILEPATH_LEN-6) {
+	
+	if(shot_filename) {
+		snprintf (priv->fname, 255, "%s.png", shot_filename);
+		free(shot_filename);
+		shot_filename = NULL;
+	} else {
+		path = strdup(filename);
+		if(path) {
+			pname = strrchr(path, '\\');
+			if(!pname) pname = strrchr(path, '/');
+			if(pname) {
+				pname[1] = 0;
+				path_len = strlen(path);
+				if(path_len > MAX_FILEPATH_LEN-6) {
+					free(path);
+					path = NULL;
+					path_len = 0;
+				}
+			} else {
 				free(path);
 				path = NULL;
-				path_len = 0;
 			}
-		} else {
-			free(path);
-			path = NULL;
 		}
-	}
 
-	pname = strdup(filename);
-	fname = strrchr(pname, '\\');
-	if(fname) {
-		++fname;
-		char *sp = strrchr(fname, '.');
-		if(sp) sp[0] = 0;
-		file_len = strlen(fname);
-		if(file_len > MAX_FILEPATH_LEN-path_len)
-			fname[MAX_FILEPATH_LEN-path_len] = 0;
-	}
+		pname = strdup(filename);
+		fname = strrchr(pname, '\\');
+		if(!fname) pname = strrchr(pname, '/');
+		if(fname) {
+			++fname;
+			char *sp = strrchr(fname, '.');
+			if(sp) sp[0] = 0;
+			file_len = strlen(fname);
+			if(file_len > MAX_FILEPATH_LEN-path_len)
+				fname[MAX_FILEPATH_LEN-path_len] = 0;
+		}
 
-    do {
-        snprintf (priv->fname, 255, "%s%s-shot%04d.png", path?path:"", fname?fname:"", ++priv->frameno);
-    } while (fexists(priv->fname) && priv->frameno < 100000);
+	    do {
+		snprintf (priv->fname, 255, "%s%s-%04d.png", path?path:"", fname?fname:"", ++priv->frameno);
+	    } while (fexists(priv->fname) && priv->frameno < 100000);
+	    if(path) free(path);
+	    if(pname) free(pname);
+    }
     if(path) free(path);
     if(pname) free(pname);
     if (fexists(priv->fname)) {
@@ -345,13 +356,13 @@ static int vf_open(vf_instance_t *vf, char *args)
     avcodec_register_all();
 
     vf->priv->avctx = avcodec_alloc_context3(NULL);
-
+    
     if (args) {
         sscanf(args, "%d", &vf->priv->avctx->compression_level);
 	    mp_msg(MSGT_VFILTER, MSGL_V, "Screenshot: compression level: %d\n",
 	        vf->priv->avctx->compression_level);
     } else {
-        vf->priv->avctx->compression_level = FF_COMPRESSION_DEFAULT;
+        vf->priv->avctx->compression_level = 0;
     }
 
     vf->priv->avctx->pix_fmt = PIX_FMT_RGB24;

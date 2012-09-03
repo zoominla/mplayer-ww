@@ -19,14 +19,11 @@
 #include "config.h"
 
 #ifdef __MINGW32__
-#define _WIN32_WINNT 0x0500
 #include <windows.h>
 #include <string.h>
 #include <process.h>
 #include "unrar.h"
 #include "resource.h"
-#include "libvo/fastmemcpy.h"
-#include "libavutil/common.h"
 #endif
 
 #include <stdio.h>
@@ -45,7 +42,6 @@
 #include "m_struct.h"
 
 int is_rar_stream = 0;
-int enable_file_mapping = 1;
 
 static struct stream_priv_s {
   char* filename;
@@ -69,13 +65,6 @@ static const struct m_struct_st stream_opts = {
 };
 
 #ifdef __MINGW32__
-
-#define _BASE_MAP_BUFFER_SIZE 8 * 1024 * 1024
-int _map_buffer_size = _BASE_MAP_BUFFER_SIZE;
-int _map_buffer_factor = 2;
-extern int is_vista;
-extern int stream_cache_size;
-
 typedef struct {
 	char *filename;
 	int hArcData;
@@ -91,20 +80,6 @@ typedef struct {
 	char *basename;
 	off_t fileSize;
 } stream_0day_priv_t;
-
-typedef struct {
-	HANDLE hFileMapping;
-	void *pbFile;
-	void *pbFileNext;
-	int   allocation;
-	int   is_file_end;
-	int   buffer_size;
-	int   buffer_size_next;
-	off_t readpos;
-	off_t offset;
-	off_t offset_next;
-	off_t fileSize;
-} stream_map_priv_t;
 
 static char pw[256];
 
@@ -426,206 +401,14 @@ rar_open_break:
 
 	return h;
 }
-
-static void close_map_file(stream_t *s)
-{
-    stream_map_priv_t *p = (stream_map_priv_t*)s->priv;
-	if(s->fd > 0)
-		CloseHandle(s->fd);
-	if(p) {
-		if(p->pbFile)
-			UnmapViewOfFile(p->pbFile);
-		p->pbFile = NULL;
-		if(p->pbFileNext)
-			UnmapViewOfFile(p->pbFileNext);
-		p->pbFileNext = NULL;
-		if(p->hFileMapping)
-			CloseHandle(p->hFileMapping);
-		p->hFileMapping = NULL;
-	}
-	s->fd = -1;
-	s->priv = 0;
-}
-
-int get_extension_cache_size(const char *filename, const char *ext)
-{
-	int file_size, cache_size, fp;
-	if(ext && filename && (!strcasecmp(ext, ".mkv") || !strcasecmp(ext, ".mov"))) {
-		cache_size = (_BASE_MAP_BUFFER_SIZE * _map_buffer_factor) / 1024 / 1024 * 1024;
-		fp=open(filename, O_RDONLY);
-		if (fp >= 0) {
-			file_size = lseek(fp, 0, SEEK_END) / 1024;
-			close(fp);
-			if(file_size > cache_size)
-				return cache_size;
-			else if(file_size > cache_size/2)
-				return cache_size/2;
-		}
-	}
-	return -1;
-}
-
-int set_map_buffer_size(stream_t *s, double bps, int use_cache)
-{
-	int m_size, cache_size = 0;
-	MEMORYSTATUSEX memstatus;
-    stream_map_priv_t *p = (stream_map_priv_t*)s->priv;
-	if(!use_cache && (!p || is_rar_stream || _map_buffer_factor < 3 || s->type != STREAMTYPE_FILE ||
-		p->buffer_size + (p->pbFileNext ? p->buffer_size_next : 0) >= p->fileSize))
-		return cache_size;
-
-	bps = bps * 8 / 1024 / 1024;
-	if(bps < 4 || bps > 256)
-		return cache_size;
-
-	if(use_cache)
-		cache_size = (_BASE_MAP_BUFFER_SIZE * _map_buffer_factor) / 1024 / 1024 * 1024;
-
-	if(8*_map_buffer_factor/bps > 30)
-		return cache_size;
-
-	switch(_map_buffer_factor)
-	{
-	case 12: // >= 4.0 GB
-		m_size = 512;
-		break;
-	case 10: // >= 3.5 GB
-		m_size = 384;
-		break;
-	case 8:	// >= 2.5 GB
-		m_size = 320;
-		break;
-	case 6:	// >= 2.0 GB
-		m_size = 256;
-		break;
-	case 4:	// >= 1.5 GB
-		m_size = 192;
-		break;
-	case 3:	// >= 1.0 GB
-		m_size = 80;
-		break;
-	default:
-		m_size = 0;
-		break;
-	}
-
-	if(m_size > 0) {
-		memstatus.dwLength =sizeof(MEMORYSTATUSEX);
-		GlobalMemoryStatusEx(&memstatus);
-
-		bps = FFMIN3(bps*30, (double)(memstatus.ullAvailPhys/1024/1024.0)/3, m_size) * 1024 * 1024;
-		if(bps < _BASE_MAP_BUFFER_SIZE)
-			return cache_size;
-
-		if(use_cache) {
-			int fsize = s->end_pos - s->start_pos;
-			cache_size = _BASE_MAP_BUFFER_SIZE * _map_buffer_factor + (int)bps/2;
-			if(cache_size > fsize && fsize > 0)
-				cache_size = fsize - 1024 * 2;
-			cache_size = cache_size / 1024 / 1024 * 1024;
-			return cache_size;
-		} else if(p && p->allocation > 0)
-			_map_buffer_size =((_BASE_MAP_BUFFER_SIZE * _map_buffer_factor + (int)bps) / 2) / p->allocation * p->allocation;
-		else
-			return cache_size;
-
-		if(p->fileSize - p->offset >= _map_buffer_size) {
-			p->buffer_size =  _map_buffer_size;
-			p->is_file_end = 0;
-		} else {
-			p->buffer_size = p->fileSize - p->offset;
-			p->is_file_end = 1;
-		}
-		UnmapViewOfFile(p->pbFile);
-		if(p->pbFileNext)
-			UnmapViewOfFile(p->pbFileNext);
-		p->pbFile = MapViewOfFile(p->hFileMapping, FILE_MAP_READ, (p->offset>>32), p->offset&0xffffffff, p->buffer_size);
-		if(p->fileSize > p->offset + p->buffer_size) {
-			p->offset_next = p->offset + p->buffer_size;
-			p->buffer_size_next = (p->fileSize - p->offset_next) > _map_buffer_size ? _map_buffer_size : (p->fileSize - p->offset_next);
-			p->pbFileNext = MapViewOfFile(p->hFileMapping, FILE_MAP_READ, (p->offset_next>>32), p->offset_next&0xffffffff, p->buffer_size_next);
-		} else {
-			p->pbFileNext = NULL;
-		}
-		mp_msg(MSGT_STREAM,MSGL_V,"[stream] resize file read buffer to: %0.2f MB\n", (float)((p->buffer_size+p->buffer_size_next)/1024)/1024);
-	}
-
-	return cache_size;
-}
-
 #endif
 
 static int fill_buffer(stream_t *s, char* buffer, int max_len){
-  int r = 0;
+  int r;
 #ifdef __MINGW32__
-  stream_map_priv_t *p;
-  if (s->priv) {
-	if(is_rar_stream)
-  		ReadFile((HANDLE)s->fd,buffer,max_len,(LPDWORD)&r,NULL);
-	else {
-		p = (stream_map_priv_t*)s->priv;
-		if(p->readpos >= p->fileSize)
-			return -1;
-		if(p->readpos + max_len <= p->offset + p->buffer_size) {
-			r = max_len;
-		} else if(p->is_file_end) {
-			r = p->fileSize - p->readpos;
-		} else if(p->pbFileNext && p->readpos + max_len <= p->offset_next + p->buffer_size_next) {
-			if(p->readpos < p->offset + p->buffer_size) {
-				r = p->buffer_size+p->offset - p->readpos;
-				fast_memcpy(buffer, p->pbFile+(int)(p->readpos-p->offset), r);
-				p->readpos += r;
-			}
-			UnmapViewOfFile(p->pbFile);
-			p->pbFile = p->pbFileNext;
-			p->offset = p->offset_next;
-			p->buffer_size = p->buffer_size_next;
-			if(p->fileSize > p->offset + p->buffer_size) {
-				p->offset_next = p->offset + p->buffer_size;
-				p->buffer_size_next = (p->fileSize - p->offset_next) > _map_buffer_size ? _map_buffer_size : (p->fileSize - p->offset_next);
-				p->pbFileNext = MapViewOfFile(p->hFileMapping, FILE_MAP_READ, (p->offset_next>>32), p->offset_next&0xffffffff, p->buffer_size_next);
-			} else {
-				p->pbFileNext = NULL;
-			}
-			fast_memcpy(buffer+r, p->pbFile+(int)(p->readpos-p->offset), max_len-r);
-			p->readpos += (max_len-r);
-			return max_len;
-		} else if(p->readpos < p->fileSize) {
-			p->offset = p->readpos;
-			p->offset = p->offset/p->allocation*p->allocation;
-			if(p->fileSize - p->offset >= _map_buffer_size) {
-				p->buffer_size =  _map_buffer_size;
-				p->is_file_end = 0;
-			} else {
-				p->buffer_size = p->fileSize - p->offset;
-				p->is_file_end = 1;
-			}
-			UnmapViewOfFile(p->pbFile);
-			p->pbFile = MapViewOfFile(p->hFileMapping, FILE_MAP_READ, (p->offset>>32), p->offset&0xffffffff, p->buffer_size);
-			if(!p->pbFile)
-				return -1;
-			if(p->pbFileNext)
-				UnmapViewOfFile(p->pbFileNext);
-			if(p->fileSize > p->offset + p->buffer_size) {
-				p->offset_next = p->offset + p->buffer_size;
-				p->buffer_size_next = (p->fileSize - p->offset_next) > _map_buffer_size ? _map_buffer_size : (p->fileSize - p->offset_next);
-				p->pbFileNext = MapViewOfFile(p->hFileMapping, FILE_MAP_READ, (p->offset_next>>32), p->offset_next&0xffffffff, p->buffer_size_next);
-			} else {
-				p->pbFileNext = NULL;
-			}
-			if(p->readpos + max_len <= p->offset + p->buffer_size) {
-				r = max_len;
-			} else if(p->is_file_end) {
-				r = p->fileSize - p->readpos;
-			}
-		}
-		if(r > 0 && r <= max_len) {
-			fast_memcpy(buffer, p->pbFile+(int)(p->readpos-p->offset), r);
-			p->readpos += r;
-		} else
-			r = 0;
-	}
-  } else
+  if (s->priv)
+  	ReadFile((HANDLE)s->fd,buffer,max_len,(LPDWORD)&r,NULL);
+  else
 #endif
     r = read(s->fd,buffer,max_len);
   // We are certain this is EOF, do not retry
@@ -742,7 +525,7 @@ static int control(stream_t *s, int cmd, void *arg) {
       off_t size;
 #ifdef __MINGW32__
       if (s->priv) {
-	  	if (is_rar_stream && s->type == STREAMTYPE_STREAM) return STREAM_UNSUPPORTED;
+	  	if (s->type == STREAMTYPE_STREAM) return STREAM_UNSUPPORTED;
 	  	size = ((stream_0day_priv_t*)s->priv)->fileSize;
       } else
 #endif
@@ -762,7 +545,7 @@ static int control(stream_t *s, int cmd, void *arg) {
 #if defined(__MINGW32__) || defined(__CYGWIN__)
 char *get_rar_stream_filename(stream_t *s)
 {
-	if (!s || !is_rar_stream || (s->control != control) || !s->priv)
+	if (!s || (s->control != control) || !s->priv)
 		return NULL;
 	else
 		return *(char**)(s->priv);
@@ -770,7 +553,7 @@ char *get_rar_stream_filename(stream_t *s)
 
 char *get_rar_stream_basename(stream_t *s)
 {
-	if (!s || !is_rar_stream || (s->seek != seek_0day))
+	if (!s || (s->seek != seek_0day))
 		return NULL;
 	else if (((stream_0day_priv_t*)s->priv)->naming)
 		return ((stream_0day_priv_t*)s->priv)->basename;
@@ -846,30 +629,10 @@ static int open_f(stream_t *stream,int mode, void* opts, int* file_format) {
 #endif
 #ifdef __MINGW32__
     char *s = strrchr(filename,'.');
-    if (mode == STREAM_READ) {
-		if(s && (!stricmp(s,".rar") || (strlen(s)>2 && s[1]>'q' && isdigit(s[2]) && isdigit(s[3]) && s[4]==0))) {
-		  f=rar_open(filename,m,stream);
-		  is_rar_stream = 1;
-		} else if(enable_file_mapping){
-      	  stream_map_priv_t *pr = (stream_map_priv_t*)malloc(sizeof(stream_map_priv_t));
-		  f=CreateFile(filename, GENERIC_READ, FILE_SHARE_READ|FILE_SHARE_WRITE, NULL, OPEN_EXISTING, FILE_FLAG_RANDOM_ACCESS, NULL);
-		  pr->fileSize = 0;
-		  pr->pbFile = 0;
-		  pr->pbFileNext = 0;
-		  pr->hFileMapping = 0;
-		  pr->offset_next = 0;
-		  pr->buffer_size_next = 0;
-		  stream->priv = (void *)pr;
-		  stream->close = close_map_file;
-		} else {
-		    f=open(filename,m, openmode);
-		    if(f<0) {
-		      mp_msg(MSGT_OPEN,MSGL_ERR,MSGTR_FileNotFound,filename);
-		      m_struct_free(&stream_opts,opts);
-		      return STREAM_ERROR;
-		    }
-		}
-	} else
+    if (mode == STREAM_READ && s && (!stricmp(s,".rar") || (strlen(s)>2 && s[1]>'q' && isdigit(s[2]) && isdigit(s[3]) && s[4]==0))) {
+      f=rar_open(filename,m,stream);
+      is_rar_stream = 1;
+    } else
 #endif
       f=open(filename,m, openmode);
     if(f<0) {
@@ -880,6 +643,7 @@ static int open_f(stream_t *stream,int mode, void* opts, int* file_format) {
   }
 
 if(!stream->end_pos) {
+  len=lseek(f,0,SEEK_END); lseek(f,0,SEEK_SET);
 #ifdef __MINGW32__
 	if(stream->priv && !is_rar_stream) {
 		stream_map_priv_t *pr = (stream_map_priv_t*)stream->priv;

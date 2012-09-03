@@ -22,6 +22,12 @@ uint64_t DS_VideoDecoder_GetPTS(DS_VideoDecoder *this);
 
 void DS_VideoDecoder_FreeFrame(DS_VideoDecoder *this);
 
+void DS_VideoDecoder_SetPTS(DS_VideoDecoder *this, uint64_t pts_nsec);
+
+uint64_t DS_VideoDecoder_GetPTS(DS_VideoDecoder *this);
+
+void DS_VideoDecoder_FreeFrame(DS_VideoDecoder *this);
+
 /*
  * bits == 0   - leave unchanged
  */

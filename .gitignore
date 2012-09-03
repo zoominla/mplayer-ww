@@ -33,7 +33,6 @@ DOCS/xml/*/main.xml
 drivers/mga_vid_test
 drivers/tdfx_vid_test
 ffmpeg/
-
 libvo/aspecttest
 loader/qtx/list
 loader/qtx/qtxload
@@ -66,10 +65,8 @@ cmk3
 mk
 mkc
 mkp
-/release
-/release_console
-/release_player
-
-
+release
+release_console
+release_player
 
 /mkd

@@ -50,7 +50,8 @@ struct fc_instance {
     int index_default;
 };
 
-extern char *sub_font_names;
+extern int use_font_name;
+extern char *sub_font_name;
 
 #ifdef CONFIG_FONTCONFIG
 
@@ -140,7 +141,8 @@ static char *select_font(ASS_Library *library, FCInstance *priv,
     *index = 0;
 
     if (treat_family_as_pattern) {
-        if (strrchr(family, '.')) goto error;
+        if (use_font_name && strrchr(family, '.'))
+			goto error;
         pat = FcNameParse((const FcChar8 *) family);
     } else
         pat = FcPatternCreate();
@@ -259,10 +261,12 @@ static char *select_font(ASS_Library *library, FCInstance *priv,
                "fontconfig: Selected font is not the requested one: "
                "'%s' != '%s'",
                (const char *) (r_fullname ? r_fullname : r_family), family);
-        if(retval)
-            free(retval);
-        retval = NULL;
-        goto error;
+		if(use_font_name) {
+	        if(retval)
+	            free(retval);
+	        retval = NULL;
+	        goto error;
+		}
     }
 
     result = FcPatternGetString(rpat, FC_STYLE, 0, &r_style);
@@ -327,10 +331,9 @@ char *fontconfig_select(ASS_Library *library, FCInstance *priv,
         res =
             select_font(library, priv, family, treat_family_as_pattern,
                          bold, italic, index, code);
-    if (!res && sub_font_names) {
-        name = calloc(1, MAX_PATH);
-        strcpy(name, sub_font_names);
-        if (strchr(name, ',')) *strchr(name, ',') = 0;
+    if (!res && use_font_name && sub_font_name) {
+        name = calloc(1, 1024);
+        strcpy(name, sub_font_name);
         res = name;
         *index = 0;
 		ass_msg(library, MSGL_WARN, "fontconfig_select: Using default "

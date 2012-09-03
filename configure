@@ -6573,7 +6573,6 @@ res_comment="in libavcodec: $_aacplus_lavc"
 echores "$_aacplus_lavc"
 
 
-
 echocheck "libopus decoding support"
 if test "$_libopus" = auto ; then
   _libopus=no

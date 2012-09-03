@@ -29,7 +29,6 @@ struct DS_VideoDecoder
 static SampleProcUserData sampleProcData;
 static int discontinuity = 1;
 static long max_frame_size = 0;
-static REFERENCE_TIME frame_time = 1;
 #include "DS_VideoDecoder.h"
 
 #include "loader/wine/winerror.h"
@@ -219,6 +218,114 @@ void DS_VideoDecoder_SetInputType(DS_VideoDecoder *this, BITMAPINFOHEADER * form
 	max_frame_size = 0;
 }
 
+DS_VideoDecoder * DS_VideoDecoder_Open(char* dllname, GUID* guid, BITMAPINFOHEADER * format, int flip, int maxauto)
+{
+    struct VIDEOINFOHEADER2 {
+        RECT32              rcSource;
+        RECT32              rcTarget;
+        DWORD               dwBitRate;
+        DWORD               dwBitErrorRate;
+        REFERENCE_TIME      AvgTimePerFrame;
+        DWORD               dwInterlaceFlags;
+        DWORD               dwCopyProtectFlags;
+        DWORD               dwPictAspectRatioX;
+        DWORD               dwPictAspectRatioY;
+        union {
+            DWORD           dwControlFlags;
+            DWORD           dwReserved1;
+        };
+        DWORD               dwReserved2;
+        BITMAPINFOHEADER    bmiHeader;
+    };
+
+    struct MPEG2VIDEOINFO {
+        struct VIDEOINFOHEADER2    hdr;
+        DWORD               dwStartTimeCode;
+        DWORD               cbSequenceHeader;
+        DWORD               dwProfile;
+        DWORD               dwLevel;
+        DWORD               dwFlags;
+        DWORD               dwSequenceHeader[1];
+    } *mp2vi;
+    int extra = 0;
+    BYTE *extradata;
+    BYTE nalu_length_field_size;
+    if(vih->bmiHeader.biSize > sizeof(BITMAPINFOHEADER)) {
+      extra = vih->bmiHeader.biSize-sizeof(BITMAPINFOHEADER);
+    }
+    mp2vi = (struct MPEG2VIDEOINFO *)malloc(sizeof(struct MPEG2VIDEOINFO)+extra-4);
+    memset(mp2vi, 0, sizeof(struct MPEG2VIDEOINFO));
+    mp2vi->hdr.rcSource = vih->rcSource;
+    mp2vi->hdr.rcTarget = vih->rcTarget;
+    mp2vi->hdr.dwBitRate = vih->dwBitRate;
+    mp2vi->hdr.dwBitErrorRate = vih->dwBitErrorRate;
+    mp2vi->hdr.AvgTimePerFrame = vih->AvgTimePerFrame;
+    mp2vi->hdr.dwPictAspectRatioX = vih->bmiHeader.biWidth;
+    mp2vi->hdr.dwPictAspectRatioY = vih->bmiHeader.biHeight;
+    memcpy(&mp2vi->hdr.bmiHeader, &vih->bmiHeader, sizeof(BITMAPINFOHEADER));
+    mp2vi->hdr.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+    if(extra) {
+      if(is_avc(vih->bmiHeader.biCompression) && !is_mpegts_format) {
+        extradata=(BYTE*)(&vih->bmiHeader + 1);
+        nalu_length_field_size=(*(extradata + 4 ) & 0x3) + 1;
+
+        mp2vi->dwProfile = *(extradata+1);
+        mp2vi->dwLevel = *(extradata+3);
+        mp2vi->dwFlags = nalu_length_field_size; //What does this mean?
+        mp2vi->cbSequenceHeader = avc_quant(
+                          (BYTE *)(&vih->bmiHeader) + sizeof(BITMAPINFOHEADER),
+                          (BYTE *)(&mp2vi->dwSequenceHeader[0]), extra);
+      } else {
+        mp2vi->cbSequenceHeader = extra;
+        memcpy(&mp2vi->dwSequenceHeader[0],
+               (BYTE *)(&vih->bmiHeader) + sizeof(BITMAPINFOHEADER), extra);
+      }
+    }
+    // The '4' is from the allocated space of dwSequenceHeader
+    *size = sizeof(struct MPEG2VIDEOINFO) + mp2vi->cbSequenceHeader - 4;
+    return (char *)mp2vi;
+}
+
+void DS_VideoDecoder_SetInputType(DS_VideoDecoder *this, BITMAPINFOHEADER * format)
+{
+  unsigned int bihs;
+
+  bihs = (format->biSize < (int) sizeof(BITMAPINFOHEADER)) ?
+         sizeof(BITMAPINFOHEADER) : format->biSize;
+  this->iv.m_bh = realloc(this->iv.m_bh, bihs);
+  memcpy(this->iv.m_bh, format, bihs);
+  this->iv.m_bh->biSize = bihs;
+  bihs += sizeof(VIDEOINFOHEADER) - sizeof(BITMAPINFOHEADER);
+  this->m_sVhdr = realloc(this->m_sVhdr, bihs);
+  memset(this->m_sVhdr, 0, bihs);
+  memcpy(&this->m_sVhdr->bmiHeader, this->iv.m_bh, this->iv.m_bh->biSize);
+  this->m_sVhdr->rcSource.left = this->m_sVhdr->rcSource.top = 0;
+  this->m_sVhdr->rcSource.right = this->m_sVhdr->bmiHeader.biWidth;
+  this->m_sVhdr->rcSource.bottom = this->m_sVhdr->bmiHeader.biHeight;
+  //this->m_sVhdr->rcSource.right = 0;
+  //this->m_sVhdr->rcSource.bottom = 0;
+  this->m_sVhdr->rcTarget = this->m_sVhdr->rcSource;
+
+  this->m_sOurType.majortype = MEDIATYPE_Video;
+  this->m_sOurType.subtype = MEDIATYPE_Video;
+  this->m_sOurType.subtype.f1 = this->m_sVhdr->bmiHeader.biCompression;
+  this->m_sOurType.formattype = FORMAT_VideoInfo;
+  this->m_sOurType.bFixedSizeSamples = false;
+  this->m_sOurType.bTemporalCompression = true;
+  this->m_sOurType.pUnk = 0;
+  this->m_sOurType.cbFormat = bihs;
+  this->m_sOurType.pbFormat = (char*)this->m_sVhdr;
+  if(is_avc(this->m_sVhdr->bmiHeader.biCompression)) {
+    int size;
+    this->m_sOurType.formattype = FORMAT_MPEG2Video;
+    this->m_sOurType.pbFormat =
+                    (char*)ConvertVIHtoMPEG2VI(this->m_sVhdr, &size);
+    this->m_sOurType.cbFormat = size;
+	max_frame_size = 12 * this->m_sVhdr->bmiHeader.biWidth * this->m_sVhdr->bmiHeader.biHeight / 8;
+  } else
+	max_frame_size = 0;
+}
+
 DS_VideoDecoder * DS_VideoDecoder_Open(char* dllname, GUID* guid, BITMAPINFOHEADER * format, double fps, int flip, int maxauto)
 {
     DS_VideoDecoder *this;
@@ -236,9 +343,6 @@ DS_VideoDecoder * DS_VideoDecoder_Open(char* dllname, GUID* guid, BITMAPINFOHEAD
 #ifdef WIN32_LOADER
     Setup_LDT_Keeper();
 #endif
-
-	if(fps > 0)
-		frame_time = 1E9/fps;
 
 	if(!stricmp(dllname, "DivXDecH264.ax")) {
 		HKEY hKey;
@@ -269,13 +373,9 @@ DS_VideoDecoder * DS_VideoDecoder_Open(char* dllname, GUID* guid, BITMAPINFOHEAD
 
         DS_VideoDecoder_SetInputType(this, format);
 
-	this->m_sVhdr2 = malloc(sizeof(VIDEOINFOHEADER2)+12);
-	memset((char*)this->m_sVhdr2, 0, sizeof(VIDEOINFOHEADER2)+12);
-	this->m_sVhdr2->rcSource = this->m_sVhdr->rcSource;
-	this->m_sVhdr2->rcTarget = this->m_sVhdr->rcTarget;
-	this->m_sVhdr2->dwBitRate = this->m_sVhdr->dwBitRate;
-	this->m_sVhdr2->dwBitErrorRate = this->m_sVhdr->dwBitErrorRate;
-	this->m_sVhdr2->bmiHeader = this->m_sVhdr->bmiHeader;
+	this->m_sVhdr2 = malloc(sizeof(VIDEOINFOHEADER)+12);
+	memcpy(this->m_sVhdr2, this->m_sVhdr, sizeof(VIDEOINFOHEADER));
+        memset((char*)this->m_sVhdr2 + sizeof(VIDEOINFOHEADER), 0, 12);
 	this->m_sVhdr2->bmiHeader.biCompression = 0;
 	this->m_sVhdr2->bmiHeader.biBitCount = 24;
 
@@ -437,6 +537,42 @@ void DS_VideoDecoder_SeekInternal(DS_VideoDecoder *this)
     discontinuity = 1;
 }
 
+void DS_VideoDecoder_SetPTS(DS_VideoDecoder *this, uint64_t pts_nsec)
+{
+    IMediaSample* sample = 0;
+    REFERENCE_TIME stoptime;
+    stoptime = pts_nsec + 1;
+    this->m_pDS_Filter->m_pAll->vt->GetBuffer(this->m_pDS_Filter->m_pAll, &sample, 0, 0, 0);
+    if(sample)
+      sample->vt->SetTime(sample, &pts_nsec, &stoptime);
+    sample->vt->Release((IUnknown*)sample);
+}
+
+uint64_t DS_VideoDecoder_GetPTS(DS_VideoDecoder *this)
+{
+    return sampleProcData.pts_nsec;
+}
+
+void DS_VideoDecoder_FreeFrame(DS_VideoDecoder *this)
+{
+    if(sampleProcData.state == PD_SENT)
+      sampleProcData.state = 0;
+}
+
+int DS_VideoDecoder_DecodeInternal(DS_VideoDecoder *this, const void* src, int size, int is_keyframe, char* pImage)
+{
+    HRESULT ret;
+    Debug printf("DS_VideoDecoder_SeekInternal\n");
+    ret = this->m_pDS_Filter->m_pInputPin->vt->BeginFlush(this->m_pDS_Filter->m_pInputPin);
+    //printf("BeginFlush returned: %08lx\n", ret);
+    ret = this->m_pDS_Filter->m_pInputPin->vt->EndFlush(this->m_pDS_Filter->m_pInputPin);
+    //printf("EndFlush returned: %08lx\n", ret);
+    ret = this->m_pDS_Filter->m_pInputPin->vt->NewSegment(this->m_pDS_Filter->m_pInputPin,0,0,1);
+    //printf("NewSegment returned: %08lx\n", ret);
+    memset(&sampleProcData, 0, sizeof(sampleProcData));
+    discontinuity = 1;
+}
+
 uint64_t DS_VideoDecoder_GetPTS(DS_VideoDecoder *this)
 {
     return sampleProcData.pts_nsec;
@@ -454,8 +590,6 @@ int DS_VideoDecoder_DecodeInternal(DS_VideoDecoder *this, const void* src, int s
     char* ptr;
     int result;
     int ret = 0;
-	REFERENCE_TIME starttime = pts;
-	REFERENCE_TIME stoptime = starttime + frame_time;
 
     Debug printf("DS_VideoDecoder_DecodeInternal(%p,%p,%d,%d,%p)\n",this,src,size,is_keyframe,pImage);
 

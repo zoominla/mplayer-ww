@@ -128,14 +128,19 @@ static mp_image_t* decode(sh_video_t *sh,void* data,int len,int flags){
     if(len<=0) return NULL; // skipped frame
 
     if(flags&3){
-		// framedrop:
+	// framedrop:
         DS_VideoDecoder_FreeFrame(sh->context);
-        DS_VideoDecoder_DecodeInternal(sh->context, data, len, 0, 0, 0);
-		return NULL;
+        DS_VideoDecoder_DecodeInternal(sh->context, data, len, 0, 0);
+	return NULL;
     }
 
     if(buffered_frames == 0)
         sh->buffered_pts[0] = sh->pts;
+
+    pts = sh->buffered_pts[0]*1E9;
+
+    mpi=mpcodecs_get_image(sh, MP_IMGTYPE_TEMP, MP_IMGFLAG_PRESERVE /*MP_IMGFLAG_COMMON_PLANE*/,
+	sh->disp_w, sh->disp_h);
 
     pts = sh->buffered_pts[0]*1E9;
 
@@ -147,7 +152,8 @@ static mp_image_t* decode(sh_video_t *sh,void* data,int len,int flags){
     }
 
     DS_VideoDecoder_FreeFrame(sh->context);
-    ret = DS_VideoDecoder_DecodeInternal(sh->context, data, len, 0, mpi->planes[0], pts);
+    DS_VideoDecoder_SetPTS(sh->context, pts);
+    ret = DS_VideoDecoder_DecodeInternal(sh->context, data, len, 0, mpi->planes[0]);
     pts = DS_VideoDecoder_GetPTS(sh->context);
 
     if(!ret) {

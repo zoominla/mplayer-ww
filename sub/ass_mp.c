@@ -82,7 +82,7 @@ static void init_style(ASS_Style *style, const char *name, double playres)
 	style->BackColour = 0x00000000;
 	style->BorderStyle = 1;
 	style->Alignment = 2;
-	style->Outline = 2;
+	style->Outline = 1;
 	style->MarginL = 10;
 	style->MarginR = 10;
 	style->MarginV = 5;
